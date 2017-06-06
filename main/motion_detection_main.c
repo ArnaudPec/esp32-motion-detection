@@ -20,23 +20,61 @@
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
 static const char *tag = "BLE_ADV";
 
+// Default time between two timer wakeups
+#define WAKEUP_TIME_MIN 24
+#define WAKEUP_TIME_MS (WAKEUP_TIME_MIN * 60UL * 1000UL)
+
+// Time counter between two reported detection
+// Must be stored in RTC slow memory(kept in sleep mode)
+static size_t RTC_DATA_ATTR ts_counter = WAKEUP_TIME_MS;
+
 void app_main()
 {
     struct timeval now;
     gettimeofday(&now, NULL);
+    int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000
+        + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
 
     switch (esp_deep_sleep_get_wakeup_cause()) {
         case ESP_DEEP_SLEEP_WAKEUP_EXT0: {
-                printf("Wake up from GPIO %d\n", EXT_WAKEUP_PIN);
-                printf("%s\n", "Motion detected!");
+
+            printf("\n%s %d\n%s %d%s\n%s\n", "Wake up from GPIO ", EXT_WAKEUP_PIN,
+                    "Time spent in deep sleep: ", sleep_time_ms, "ms",
+                    "MOTION DETECTED!");
+
+            if (ts_counter >= (WAKEUP_TIME_MS)) {
+                printf("%s\n", "REPORTED!");
+                ts_counter = 0;
+            }
+            else {
+                ts_counter += sleep_time_ms;
+            }
+
+            printf("%s %d\n%s\n", "Last report: ", ts_counter,
+                    "Delay to avoid multiple detection of the same motion");
+
+            vTaskDelay(4000 / portTICK_PERIOD_MS);
+
             break;
         }
+
+        case ESP_DEEP_SLEEP_WAKEUP_TIMER: {
+
+            printf("\nWake up from timer.\nTime spent in deep sleep: %dms\n",
+                    sleep_time_ms);
+            break;
+        }
+
         case ESP_DEEP_SLEEP_WAKEUP_UNDEFINED:
         default:
             printf("Not a deep sleep reset\n");
     }
 
     vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+    // Timer wakeup
+    printf("Enabling timer wakeup, %dm\n", WAKEUP_TIME_MIN);
+    esp_deep_sleep_enable_timer_wakeup(WAKEUP_TIME_MS * 1000); // microsec here !
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
 
@@ -50,6 +88,7 @@ void app_main()
         return;
     }
 
+    // GPIO wakeup
     printf("Enabling EXT1 wakeup on pins GPIO%d\n", EXT_WAKEUP_PIN);
     esp_deep_sleep_enable_ext0_wakeup(EXT_WAKEUP_PIN, 1);
 
