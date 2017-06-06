@@ -13,12 +13,21 @@
 #include "soc/rtc_cntl_reg.h"
 #include "soc/sens_reg.h"
 #include "soc/rtc.h"
+#include "esp_system.h"
+#include "nvs_flash.h"
+#include "driver/uart.h"
+#include "freertos/queue.h"
+#include "soc/uart_struct.h"
 #include "bt.h"
 
 #define EXT_WAKEUP_PIN 25
+#define BUF_SIZE (1024)
+#define EX_UART_NUM UART_NUM_0
+
+static QueueHandle_t uart0_queue;
 
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
-static const char *tag = "BLE_ADV";
+static const char *tag_ble = "BLE_ADV";
 
 // Default time between two timer wakeups
 #define WAKEUP_TIME_MIN 24
@@ -28,8 +37,23 @@ static const char *tag = "BLE_ADV";
 // Must be stored in RTC slow memory(kept in sleep mode)
 static size_t RTC_DATA_ATTR ts_counter = WAKEUP_TIME_MS;
 
+static void write_commands();
+
 void app_main()
 {
+    uart_config_t uart_config = {
+        .baud_rate = 9600,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .rx_flow_ctrl_thresh = 122,
+    };
+
+    uart_param_config(EX_UART_NUM, &uart_config);
+    uart_set_pin(EX_UART_NUM, 4, 5, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    uart_driver_install(EX_UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 10, &uart0_queue, 0);
+
     struct timeval now;
     gettimeofday(&now, NULL);
     int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000
@@ -43,6 +67,9 @@ void app_main()
                     "MOTION DETECTED!");
 
             if (ts_counter >= (WAKEUP_TIME_MS)) {
+
+                xTaskCreate(write_commands, "write_commands", 2048, NULL, 12, NULL);
+
                 printf("%s\n", "REPORTED!");
                 ts_counter = 0;
             }
@@ -62,6 +89,7 @@ void app_main()
 
             printf("\nWake up from timer.\nTime spent in deep sleep: %dms\n",
                     sleep_time_ms);
+            xTaskCreate(write_commands, "write_commands", 2048, NULL, 12, NULL);
             break;
         }
 
@@ -79,12 +107,12 @@ void app_main()
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
 
     if (esp_bt_controller_init(&bt_cfg) != ESP_OK) {
-        ESP_LOGI(tag, "Bluetooth controller initialize failed");
+        ESP_LOGI(tag_ble, "Bluetooth controller initialize failed");
         return;
     }
 
     if (esp_bt_controller_enable(ESP_BT_MODE_BTDM) != ESP_OK) {
-        ESP_LOGI(tag, "Bluetooth controller enable failed");
+        ESP_LOGI(tag_ble, "Bluetooth controller enable failed");
         return;
     }
 
@@ -96,4 +124,14 @@ void app_main()
     gettimeofday(&sleep_enter_time, NULL);
 
     esp_deep_sleep_start();
+}
+
+static void write_commands()
+{
+    uart_write_bytes(EX_UART_NUM, "ATI7\r", 6);
+    uart_write_bytes(EX_UART_NUM, "AT$SS=22\r", 9);
+
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+    vTaskDelete(NULL);
 }
