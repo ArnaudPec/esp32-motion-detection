@@ -18,9 +18,11 @@
 #include "driver/uart.h"
 #include "freertos/queue.h"
 #include "soc/uart_struct.h"
+#include "dht22.h"
 #include "bt.h"
 
 #define EXT_WAKEUP_PIN 25
+#define DHT_PIN 26
 #define BUF_SIZE (1024)
 #define EX_UART_NUM UART_NUM_0
 
@@ -39,6 +41,8 @@ static size_t RTC_DATA_ATTR ts_counter = WAKEUP_TIME_MS;
 
 static void write_commands();
 
+int temp, hum;
+
 void app_main()
 {
     uart_config_t uart_config = {
@@ -53,6 +57,10 @@ void app_main()
     uart_param_config(EX_UART_NUM, &uart_config);
     uart_set_pin(EX_UART_NUM, 4, 5, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     uart_driver_install(EX_UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 10, &uart0_queue, 0);
+
+    set_DHT_pin(DHT_PIN);
+    hum = (int)get_hum();
+    temp = (int)get_tempc();
 
     struct timeval now;
     gettimeofday(&now, NULL);
@@ -128,8 +136,10 @@ void app_main()
 
 static void write_commands()
 {
-    uart_write_bytes(EX_UART_NUM, "ATI7\r", 6);
-    uart_write_bytes(EX_UART_NUM, "AT$SS=22\r", 9);
+    char msg[15];
+    sprintf(msg, "AT$SS=%d %d %1.2d\r", temp, hum, 1);
+
+    uart_write_bytes(EX_UART_NUM, msg, strlen(msg));
 
     vTaskDelay(1000 / portTICK_PERIOD_MS);
 
