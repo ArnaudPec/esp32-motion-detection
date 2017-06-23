@@ -19,7 +19,6 @@
 #include "freertos/queue.h"
 #include "soc/uart_struct.h"
 #include "dht22.h"
-#include "bt.h"
 
 #define EXT_WAKEUP_PIN 25
 #define DHT_PIN 26
@@ -29,7 +28,6 @@
 static QueueHandle_t uart0_queue;
 
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
-static const char *tag_ble = "BLE_ADV";
 
 // Default time between two timer wakeups
 #define WAKEUP_TIME_MIN 24
@@ -39,12 +37,19 @@ static const char *tag_ble = "BLE_ADV";
 // Must be stored in RTC slow memory(kept in sleep mode)
 static size_t RTC_DATA_ATTR ts_counter = WAKEUP_TIME_MS;
 
-static void write_commands();
+// Time counter between two timer wakeup
+// Prevents error in timer wakeup ie waking up before the goal time
+// Should not happen in theory, but life is full of suprises
+static size_t RTC_DATA_ATTR safety_wakeup_counter = WAKEUP_TIME_MS;
+
+static void detection_send();
+static void regular_send();
 
 int temp, hum;
 
 void app_main()
 {
+    // Uart configuration
     uart_config_t uart_config = {
         .baud_rate = 9600,
         .data_bits = UART_DATA_8_BITS,
@@ -58,6 +63,7 @@ void app_main()
     uart_set_pin(EX_UART_NUM, 4, 5, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     uart_driver_install(EX_UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 10, &uart0_queue, 0);
 
+    // Reading temperature and humidity
     set_DHT_pin(DHT_PIN);
     hum = (int)get_hum();
     temp = (int)get_tempc();
@@ -76,7 +82,7 @@ void app_main()
 
             if (ts_counter >= (WAKEUP_TIME_MS)) {
 
-                xTaskCreate(write_commands, "write_commands", 2048, NULL, 12, NULL);
+                xTaskCreate(detection_send, "detection_send", 2048, NULL, 12, NULL);
 
                 printf("%s\n", "REPORTED!");
                 ts_counter = 0;
@@ -88,7 +94,7 @@ void app_main()
             printf("%s %d\n%s\n", "Last report: ", ts_counter,
                     "Delay to avoid multiple detection of the same motion");
 
-            vTaskDelay(4000 / portTICK_PERIOD_MS);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
 
             break;
         }
@@ -97,7 +103,16 @@ void app_main()
 
             printf("\nWake up from timer.\nTime spent in deep sleep: %dms\n",
                     sleep_time_ms);
-            xTaskCreate(write_commands, "write_commands", 2048, NULL, 12, NULL);
+            if (safety_wakeup_counter >= (WAKEUP_TIME_MS)) {
+
+                xTaskCreate(regular_send, "regular_send", 2048, NULL, 12, NULL);
+
+                printf("%s\n", "REPORTED!");
+                safety_wakeup_counter = 0;
+            }
+            else {
+                safety_wakeup_counter += sleep_time_ms;
+            }
             break;
         }
 
@@ -112,18 +127,6 @@ void app_main()
     printf("Enabling timer wakeup, %dm\n", WAKEUP_TIME_MIN);
     esp_deep_sleep_enable_timer_wakeup(WAKEUP_TIME_MS * 1000); // microsec here !
 
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-
-    if (esp_bt_controller_init(&bt_cfg) != ESP_OK) {
-        ESP_LOGI(tag_ble, "Bluetooth controller initialize failed");
-        return;
-    }
-
-    if (esp_bt_controller_enable(ESP_BT_MODE_BTDM) != ESP_OK) {
-        ESP_LOGI(tag_ble, "Bluetooth controller enable failed");
-        return;
-    }
-
     // GPIO wakeup
     printf("Enabling EXT1 wakeup on pins GPIO%d\n", EXT_WAKEUP_PIN);
     esp_deep_sleep_enable_ext0_wakeup(EXT_WAKEUP_PIN, 1);
@@ -134,13 +137,23 @@ void app_main()
     esp_deep_sleep_start();
 }
 
-static void write_commands()
+static void detection_send()
 {
     char msg[15];
     sprintf(msg, "AT$SS=%d %d %1.2d\r", temp, hum, 1);
 
     uart_write_bytes(EX_UART_NUM, msg, strlen(msg));
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
 
+    vTaskDelete(NULL);
+}
+
+static void regular_send()
+{
+    char msg[15];
+    sprintf(msg, "AT$SS=%d %d %1.2d\r", temp, hum, 0);
+
+    uart_write_bytes(EX_UART_NUM, msg, strlen(msg));
     vTaskDelay(1000 / portTICK_PERIOD_MS);
 
     vTaskDelete(NULL);
