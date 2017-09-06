@@ -43,9 +43,9 @@ static size_t RTC_DATA_ATTR ts_counter = WAKEUP_TIME_MS;
 static size_t RTC_DATA_ATTR safety_wakeup_counter = WAKEUP_TIME_MS;
 
 static void detection_send();
-static void regular_send();
+static void message_send();
 
-int temp, hum;
+int temp, hum, detect;
 
 void app_main()
 {
@@ -80,9 +80,11 @@ void app_main()
                     "Time spent in deep sleep: ", sleep_time_ms, "ms",
                     "MOTION DETECTED!");
 
+            detect = 1;
+
             if (ts_counter >= (WAKEUP_TIME_MS)) {
 
-                xTaskCreate(detection_send, "detection_send", 2048, NULL, 12, NULL);
+                xTaskCreate(message_send, "message_send", 2048, (void *)&detect, 12, NULL);
 
                 printf("%s\n", "REPORTED!");
                 ts_counter = 0;
@@ -103,9 +105,12 @@ void app_main()
 
             printf("\nWake up from timer.\nTime spent in deep sleep: %dms\n",
                     sleep_time_ms);
+
+            detect = 0;
+
             if (safety_wakeup_counter >= (WAKEUP_TIME_MS)) {
 
-                xTaskCreate(regular_send, "regular_send", 2048, NULL, 12, NULL);
+                xTaskCreate(message_send, "message_send", 2048, (void *)&detect, 12, NULL);
 
                 printf("%s\n", "REPORTED!");
                 safety_wakeup_counter = 0;
@@ -137,21 +142,10 @@ void app_main()
     esp_deep_sleep_start();
 }
 
-static void detection_send()
+static void message_send(void * param)
 {
     char msg[15];
-    sprintf(msg, "AT$SS=%d %d %1.2d\r", temp, hum, 1);
-
-    uart_write_bytes(EX_UART_NUM, msg, strlen(msg));
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-
-    vTaskDelete(NULL);
-}
-
-static void regular_send()
-{
-    char msg[15];
-    sprintf(msg, "AT$SS=%d %d %1.2d\r", temp, hum, 0);
+    sprintf(msg, "AT$SS=%d %d %1.2d\r", temp, hum, (*(int *) param));
 
     uart_write_bytes(EX_UART_NUM, msg, strlen(msg));
     vTaskDelay(1000 / portTICK_PERIOD_MS);
